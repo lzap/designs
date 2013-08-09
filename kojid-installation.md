@@ -15,27 +15,25 @@ Since the storage is ephemeral, we don't need to deal with fstab.
 Copy our public ssh keys into /root/.ssh/authorizued_keys deleting the entry
 there which disables root account.
 
-Also add this entry to the /etc/hosts
+Also add this entry to the /etc/hosts (must be the valid FQDN of the hub)
 
-    echo "10.42.135.135 kojihub" >> /etc/hosts
+    echo "10.42.135.135 koji.katello.org" >> /etc/hosts
 
 Prerequisites
 -------------
 
-We assume that two directories are exported on the hub
-
-    mkdir -p /exports/koji /exports/external-repos
-    mount /mnt/koji /exports/koji -o bind
-    mount /mnt/tmp/external-repos/ /exports/external-repos -o bind
+We assume that two directories are exported on the hub (see /etc/exports on
+the hub)
 
 And we assume NFS ports are set and iptables rules too, see
 http://lukas.zapletalovi.com/2011/05/export-for-both-nfs-v4-and-v3-clients.html
+how to do that correctly.
 
 Make sure the builder is in the same security group as the hub (which is
-"default"). To check NFS is working just do this:
+"default"). To check NFS is working just do this (on the builder)
 
-    showmount -e kojihub
-    Export list for kojihub:
+    showmount -e koji.katello.org
+    Export list for koji.katello.org:
     /exports/external-repos *
     /exports/koji           *
     /exports                *
@@ -46,17 +44,23 @@ Installation
 Enable EPEL
 
     yum -y install http://mirror.slu.cz/epel/6/i386/epel-release-6-8.noarch.rpm
+
+And install koji-builder package
+
     yum -y install koji-builder
+
+We are done.
 
 Configuration
 -------------
 
-First of all, we need to mount several directories from the hub
+First of all, we need to mount several directories from the hub (see above)
 
     mkdir /mnt/koji
-    mount -t nfs -o vers=4 kojihub:/koji /mnt/koji
+    mount -t nfs -o vers=4 koji.katello.org:/koji /mnt/koji
+    mount -t nfs -o vers=4 koji.katello.org:/repos /mnt/koji/repos
     mkdir /mnt/tmp/external-repos
-    mount -t nfs -o vers=4 kojihub:/external-repos /mnt/tmp/external-repos
+    mount -t nfs -o vers=4 koji.katello.org:/external-repos /mnt/tmp/external-repos
 
 Follow http://fedoraproject.org/wiki/Koji/ServerHowTo#Koji_Daemon_-_Builder
 
@@ -80,4 +84,47 @@ Move data and prepare symlinks (root partition is too small)
     ln -s /mnt/tmp/var/cache/yum /var/cache/yum
 
 Now edit /etc/kojid/kojid.conf
+
+    cat /etc/kojid/kojid.conf
+    
+    [kojid]
+    mockhost=redhat-linux-gnu
+    server = http://koji.katello.org/kojihub
+    pkgurl = http://koji.katello.org/packages
+    smtphost=localhost
+    from_addr=Katello Koji Build System <buildsys@katello.org>
+    cert = /etc/pki/koji/kojibuilder2.pem
+    ca = /etc/pki/koji/koji_ca_cert.crt
+    serverca = /etc/pki/koji/koji_ca_cert.crt
+
+Due to older version of Koji on the hub, we need to downgrade koji-builder to
+version 1.6.0-1. FIXME this should be published on fedorahosted.
+
+    # service kojid stop
+    # mkdir -p /var/opt/repos/RPMS/
+    download koji-1.6.0 packages into /var/opt/repos/RPMS/
+    # cd /var/opt/repos/RPMS/
+    # createrepo .
+    edit /etc/yum.repos.d/local.repo
+    # yum --disablerepo=epel install koji-builder
+    # mv /etc/kojid/kojid.conf.rpmsave /etc/kojid/kojid.conf
+    # service kojid start
+
+Now, install this (hotfix) release which is the latest and greatest
+createrepo written in C (this is not ever released in EPEL yet).
+
+    download createrepo_c-0.1.17-3 /var/opt/repos/RPMS/
+    # cd /var/opt/repos/RPMS/
+    # createrepo .
+    # yum install createrepo_c
+
+And change /usr/sbin/kojid to call createrepo_c instead of the Python version.
+
+Add the new instance to the hub (do this as root on the hub shell)
+
+    koji add-host kojibuilderN i386 x86_64
+    koji add-host-to-channel kojibuilderN createrepo
+
+We are done, each builder instance has capability to build and create build
+roots via NFS.
 
