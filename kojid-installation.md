@@ -2,15 +2,20 @@ Installation of Koji Daemon Builder
 ===================================
 
 I am using Amazon EC2 instance (large). Create new instance in the same
-datacenter as Koji Hub with all ports opened. I used RHEL 6.4 64bit system and
-attached one ephemeral volume (it must be manually mounted - as /mnt/tmp).
+datacenter as Koji Hub in the same security group (or with access to the 
+hub I mean). I used RHEL 6.4 64bit system and attached one ephemeral
+volume (it must be manually mounted - as /mnt/tmp).
 
     echo -e "p\nn\np\n1\n\n\np\nw\n" | fdisk /dev/xvdf
     mkfs.ext4 /dev/xvdf1
     mkdir /mnt/tmp
-    mount /dev/xvdf1 /mnt/tmp
+    echo "/dev/xvdf1 /mnt/tmp ext4 defaults 0 0" >> /etc/fstab
+    mount -a
 
-Since the storage is ephemeral, we don't need to deal with fstab.
+Note: The RHEL 6.4 AMI had an incorrect entry in /etc/fstab for some reason,
+delete it:
+
+    mount: special device /dev/xvdb does not exist
 
 Copy our public ssh keys into /root/.ssh/authorizued_keys deleting the entry
 there which disables root account.
@@ -30,13 +35,27 @@ http://lukas.zapletalovi.com/2011/05/export-for-both-nfs-v4-and-v3-clients.html
 how to do that correctly.
 
 Make sure the builder is in the same security group as the hub (which is
-"default"). To check NFS is working just do this (on the builder)
+"default"), or configure security groups in a way that koji builder can access
+NFS, 80 and 443 ports. To check NFS is working just do this (on the builder)
 
     showmount -e koji.katello.org
     Export list for koji.katello.org:
     /exports/external-repos *
     /exports/koji           *
     /exports                *
+
+Before starting with configuration, we need to mount several directories from
+the hub (see above)
+
+    mkdir /mnt/koji
+    mount -t nfs -o vers=4 koji.katello.org:/koji /mnt/koji
+    mount -t nfs -o vers=4 koji.katello.org:/repos /mnt/koji/repos
+    mkdir /mnt/tmp/external-repos
+    mount -t nfs -o vers=4 koji.katello.org:/external-repos /mnt/tmp/external-repos
+
+    echo "koji.katello.org:/koji /mnt/koji nfs defaults" >> /etc/hosts
+    echo "koji.katello.org:/repos /mnt/koji/repos nfs defaults" >> /etc/hosts
+    echo "koji.katello.org:/external-repos /mnt/tmp/external-repos nfs defaults" >> /etc/hosts
 
 Installation
 ------------
@@ -54,15 +73,8 @@ We are done.
 Configuration
 -------------
 
-First of all, we need to mount several directories from the hub (see above)
-
-    mkdir /mnt/koji
-    mount -t nfs -o vers=4 koji.katello.org:/koji /mnt/koji
-    mount -t nfs -o vers=4 koji.katello.org:/repos /mnt/koji/repos
-    mkdir /mnt/tmp/external-repos
-    mount -t nfs -o vers=4 koji.katello.org:/external-repos /mnt/tmp/external-repos
-
 Follow http://fedoraproject.org/wiki/Koji/ServerHowTo#Koji_Daemon_-_Builder
+(instructions now follow):
 
     mkdir /etc/pki/koji
 
@@ -110,6 +122,9 @@ version 1.6.0-1. FIXME this should be published on fedorahosted.
     # mv /etc/kojid/kojid.conf.rpmsave /etc/kojid/kojid.conf
     # service kojid start
 
+TODO: We can move the above repo to public and use that to install the
+particular version.
+
 Now, install this (hotfix) release which is the latest and greatest
 createrepo written in C (this is not ever released in EPEL yet).
 
@@ -117,6 +132,10 @@ createrepo written in C (this is not ever released in EPEL yet).
     # cd /var/opt/repos/RPMS/
     # createrepo .
     # yum install createrepo_c
+
+TODO: The above can go away once
+https://admin.fedoraproject.org/updates/FEDORA-EPEL-2013-11107/createrepo_c-0.2.0-1.el6
+is published.
 
 And change /usr/sbin/kojid to call createrepo_c instead of the Python version.
 
